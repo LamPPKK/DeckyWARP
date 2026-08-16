@@ -1,0 +1,13 @@
+post_install() {
+    setcap CAP_NET_ADMIN=+ei /usr/bin/warp-svc
+    echo "Enable WARP with: systemctl enable --now warp-svc.service"
+}
+
+post_upgrade() {
+    setcap CAP_NET_ADMIN=+ei /usr/bin/warp-svc
+    echo "Restart WARP after upgrading with: systemctl restart warp-svc.service"
+}
+
+post_remove() {
+    echo "The WARP registration data in /var/lib/cloudflare-warp was preserved."
+}

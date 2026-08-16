@@ -1,6 +1,5 @@
-// src/components/CustomButtonItem.tsx
-import React from "react";
-import { Focusable } from "decky-frontend-lib";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import { Focusable } from "@decky/ui";
 
 export const CustomButtonItem = ({
   onClick,
@@ -8,10 +7,10 @@ export const CustomButtonItem = ({
   disabled = false,
 }: {
   onClick: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
   disabled?: boolean;
 }) => {
-  const baseStyle: React.CSSProperties = {
+  const baseStyle: CSSProperties = {
     backgroundColor: disabled ? "rgb(30, 34, 36)" : "rgb(43, 51, 55)",
     color: disabled ? "rgba(255, 255, 255, 0.4)" : "white",
     fontSize: "16px",
@@ -26,35 +25,33 @@ export const CustomButtonItem = ({
     pointerEvents: disabled ? "none" : "auto",
   };
 
-  const handleMouseEnter = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!disabled) e.currentTarget.style.backgroundColor = "rgb(57, 65, 69)";
+  const handleMouseEnter = (event: MouseEvent<HTMLDivElement>) => {
+    if (!disabled) event.currentTarget.style.backgroundColor = "rgb(57, 65, 69)";
   };
 
-  const handleMouseLeave = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleMouseLeave = (event: MouseEvent<HTMLDivElement>) => {
     if (!disabled) {
-      e.currentTarget.style.backgroundColor = "rgb(43, 51, 55)";
-      e.currentTarget.style.color = "white";
+      event.currentTarget.style.backgroundColor = "rgb(43, 51, 55)";
+      event.currentTarget.style.color = "white";
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     if (!disabled) {
-      e.currentTarget.style.backgroundColor = "rgb(108, 113, 116)";
-      e.currentTarget.style.color = "rgb(43, 51, 55)";
+      event.currentTarget.style.backgroundColor = "rgb(108, 113, 116)";
+      event.currentTarget.style.color = "rgb(43, 51, 55)";
     }
   };
 
-  const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleMouseUp = (event: MouseEvent<HTMLDivElement>) => {
     if (!disabled) {
-      e.currentTarget.style.backgroundColor = "rgb(57, 65, 69)";
-      e.currentTarget.style.color = "white";
+      event.currentTarget.style.backgroundColor = "rgb(57, 65, 69)";
+      event.currentTarget.style.color = "white";
     }
   };
 
   return (
-    <Focusable
-      onActivate={!disabled ? onClick : undefined}
-    >
+    <Focusable onActivate={!disabled ? onClick : undefined}>
       <div
         onClick={!disabled ? onClick : undefined}
         onMouseEnter={handleMouseEnter}

@@ -1,425 +1,310 @@
-import asyncio, subprocess, time, pathlib, os
+import asyncio
+import json
+import os
+import pathlib
+import re
+import subprocess
+import time
+import urllib.request
 
-# ── logging ──────────────────────────────────────────────
 
-def log_to_file(msg: str):
-    try:
-        with open("/tmp/deckywarp.log", "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
-
-# ── constants ────────────────────────────────────────────
-
-WARP_BIN = "/usr/bin/warp-cli"
+PLUGIN_ROOT = pathlib.Path(__file__).resolve().parent
+PLUGIN_JSON = PLUGIN_ROOT / "plugin.json"
+WARP_BIN = pathlib.Path("/usr/bin/warp-cli")
+WARP_SERVICE = "warp-svc.service"
 TIMEOUT = 30
 
-# --- install warp-cli ---
-FLAG = pathlib.Path("/tmp/.warp_installing")
-LOG = pathlib.Path("/tmp/warp_install.log")
-UNIT = "warp-install"
-TOS_DONE = pathlib.Path("/tmp/.warp_tos_done")
+RUNTIME_DIR = pathlib.Path("/run/deckywarp")
+LOG_DIR = pathlib.Path("/var/log/deckywarp")
 
-# --- plugin update/check ---  ⬅️ new unified flags/units
-UPD_FLAG = pathlib.Path("/tmp/.deckywarp_updating")
-UPD_LOG = pathlib.Path("/tmp/deckywarp_update.log")
-UPD_UNIT = "deckywarp-update"
+JOB_FLAG = RUNTIME_DIR / "job"
+INSTALL_LOG = LOG_DIR / "install.log"
+INSTALL_SCRIPT = PLUGIN_ROOT / "scripts" / "install-warp.sh"
 
-CHK_FLAG = pathlib.Path("/tmp/.deckywarp_checking")
-CHK_LOG = pathlib.Path("/tmp/deckywarp_check.log")
-CHK_UNIT = "deckywarp-check"
+UPDATE_LOG = LOG_DIR / "update.log"
+UPDATE_SCRIPT = PLUGIN_ROOT / "scripts" / "update-plugin.sh"
 
-# ── helpers ───────────────────────────────────────────────
+PLUGIN_LOG = LOG_DIR / "plugin.log"
+LATEST_RELEASE_API = "https://api.github.com/repos/LamPPKK/DeckyWARP/releases/latest"
+
+
+def log_to_file(message: str) -> None:
+    try:
+        with PLUGIN_LOG.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"{message}\n")
+    except OSError:
+        pass
+
+
+def _ensure_private_directory(path: pathlib.Path, mode: int) -> None:
+    if path.is_symlink():
+        raise RuntimeError(f"refusing symlinked DeckyWARP directory: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    os.chown(path, 0, 0)
+    path.chmod(mode)
+
 
 def _clean_env():
-    """Return a copy of os.environ *без* LD_LIBRARY_PATH, чтобы subprocess
-    использовал системные библиотеки, а не Steam Runtime Decky Loader."""
+    """Avoid loading Steam Runtime libraries in host commands."""
     env = os.environ.copy()
     env.pop("LD_LIBRARY_PATH", None)
     return env
 
 
-def _unit_state(name):
+def _run_sync(*cmd, timeout=None):
     try:
-        return subprocess.check_output(
-            ["systemctl", "show", name, "-p", "ActiveState"],
+        return subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
+            timeout=timeout,
             env=_clean_env(),
-        ).strip().split("=", 1)[1]
-    except subprocess.CalledProcessError:
-        return "inactive"
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log_to_file(f"command failed: {' '.join(map(str, cmd))}: {error}")
+        return None
 
 
-def _run_q(*cmd):
-    return subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        env=_clean_env(),
-    )
+async def _run(*cmd):
+    return await asyncio.to_thread(_run_sync, *cmd)
 
 
 def _raw_status():
-    return (_run_q(WARP_BIN, "status").stdout or "").strip()
+    result = _run_sync(str(WARP_BIN), "status", timeout=10)
+    return (result.stdout or "").strip() if result else ""
 
-# ---------- generic flag helpers -------------------------------------------
 
-def _cleanup_flag(flag: pathlib.Path, unit_name: str):
-    if flag.exists() and _unit_state(unit_name) in ("inactive", "failed"):
+def _job_active(flag):
+    if not flag.exists():
+        return False
+    try:
+        unit_name = flag.read_text(encoding="utf-8").strip()
+        age = time.time() - flag.stat().st_mtime
+    except OSError:
+        return False
+
+    if re.fullmatch(r"deckywarp-(?:install|update)-\d+", unit_name):
+        result = _run_sync(
+            "systemctl",
+            "show",
+            "--property=ActiveState",
+            "--value",
+            unit_name,
+            timeout=5,
+        )
+        active_state = (result.stdout or "").strip() if result else ""
+        if active_state in {"active", "activating", "reloading", "deactivating"}:
+            return True
+        if age < 5:
+            return True
+
+    try:
         flag.unlink(missing_ok=True)
+    except OSError as error:
+        log_to_file(f"could not remove stale job flag {flag}: {error}")
+    return False
 
-
-def _busy(flag: pathlib.Path):
-    return flag.exists()
-
-# ── warp-cli state helpers ─────────────────────────────────────────────────
 
 def _state():
-    _cleanup_flag(FLAG, UNIT)
-    if FLAG.exists():
+    if _job_active(JOB_FLAG):
         return "installing"
-    if not pathlib.Path(WARP_BIN).exists():
+    if not WARP_BIN.exists():
         return "missing"
 
-    out = _raw_status().lower()
-
-    if "accept the warp terms" in out and not TOS_DONE.exists():
-        subprocess.run([WARP_BIN, "--accept-tos"], check=False, env=_clean_env())
-        subprocess.run([WARP_BIN, "registration", "new"], check=False, env=_clean_env())
-        subprocess.run(["systemctl", "restart", "warp-svc.service"], check=False, env=_clean_env())
-        TOS_DONE.touch()
-        time.sleep(2)
-        out = _raw_status().lower()
-
-    if "unable to connect to the cloudflarewarp daemon" in out:
-        return "disconnected"
-
-    if "registration missing" in out:
+    status = _raw_status().lower()
+    if (
+        "registration missing" in status
+        or "not registered" in status
+        or "accept the warp terms" in status
+        or "terms of service" in status
+    ):
         return "unregistered"
-    if "disconnected" in out:
+    if "unable to connect" in status and "daemon" in status:
         return "disconnected"
-    if "connected" in out:
+    if "disconnected" in status:
+        return "disconnected"
+    if "connecting" in status:
+        return "connecting"
+    if "connected" in status:
         return "connected"
     return "error"
 
-# ── async wrappers ----------------------------------------------------------
 
-async def _run(*cmd):
-    await asyncio.to_thread(subprocess.run, cmd, check=False, env=_clean_env())
-
-
-async def _wait(desired):
-    end = time.time() + TIMEOUT
-    while time.time() < end and _state() != desired:
+async def _wait_for(desired_state):
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        current_state = _state()
+        if current_state == desired_state:
+            return current_state
         await asyncio.sleep(0.5)
     return _state()
 
 
-async def _register():
-    await _run("bash", "-c", f"printf 'y\n' | {WARP_BIN} registration new")
-    await _run(WARP_BIN, "mode", "warp+doh")
+async def _start_transient_job(name, script, flag):
+    if _job_active(flag):
+        return False
+    if not script.is_file():
+        log_to_file(f"missing helper script: {script}")
+        return False
 
-# ── install-script ────────────────────────────────────────
+    unit_name = f"{name}-{time.time_ns()}"
+    try:
+        with flag.open("x", encoding="utf-8") as flag_file:
+            flag_file.write(f"{unit_name}\n")
+        flag.chmod(0o600)
+    except FileExistsError:
+        return False
+    except OSError as error:
+        log_to_file(f"could not create job flag {flag}: {error}")
+        return False
 
-INSTALL_SH = r"""#!/bin/bash
-set -e
-exec > >(tee -a /tmp/warp_install.log) 2>&1
-echo "## start: $(date)"
-steamos-readonly status | grep -q disabled || echo y | steamos-readonly disable
-mount -o remount,rw /
-rm -rf /etc/pacman.d/gnupg
-install -dm700 /etc/pacman.d/gnupg
-pacman-key --init
-pacman-key --populate
-pacman -Sy --noconfirm base-devel fakeroot curl
-pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
-pacman-key --lsign-key 3056513887B78AEB
-pacman -U --noconfirm \
-  'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' \
-  'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
-grep -q '\[chaotic-aur\]' /etc/pacman.conf || \
-  echo -e '\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' >> /etc/pacman.conf
-pacman -Sy --noconfirm cloudflare-warp-bin
-/usr/bin/warp-cli --accept-tos
-/usr/bin/warp-cli registration new
-systemctl enable --now warp-svc.service
-/usr/bin/warp-cli mode warp+doh
-/usr/bin/warp-cli connect || true
-echo "## done: $(date)"
-"""
-
-
-def _write_script():
-    p = pathlib.Path("/tmp/warp_install.sh")
-    p.write_text(INSTALL_SH)
-    p.chmod(0o755)
-    LOG.write_text("")
-    return str(p)
-
-# ── update-script (plugin self‑update) ──────────────────────────────────────
-
-UPDATE_SH = r"""#!/bin/bash
-set -e
-exec > >(tee -a /tmp/deckywarp_update.log) 2>&1
-echo "== START UPDATE: $(date)"
-
-PLUGIN_DIR="/home/deck/homebrew/plugins/DeckyWARP"
-TMP_DIR="/tmp/deckywarp_update"
-ZIP_URL="https://api.github.com/repos/Kit1112/DeckyWARP/releases/latest"
-
-rm -rf "$TMP_DIR"
-mkdir -p "$TMP_DIR"
-cd "$TMP_DIR"
-
-echo "== FETCHING ASSET URL =="
-ASSET_URL=$(curl -s "$ZIP_URL" | grep '"zipball_url":' | cut -d '"' -f 4)
-[ -z "$ASSET_URL" ] && echo "ERROR: no asset url" && exit 1
-echo "Asset URL: $ASSET_URL"
-
-echo "== DOWNLOADING ZIP =="
-curl -L -o latest.zip "$ASSET_URL"
-[ ! -f latest.zip ] && echo "ERROR: download failed" && exit 1
-echo "Downloaded zip: $(du -h latest.zip)"
-
-echo "== UNZIPPING =="
-unzip -qo latest.zip || { echo "ERROR: unzip failed"; exit 1; }
-INNER_DIR=$(find . -maxdepth 1 -type d -name "*DeckyWARP*" | head -n 1)
-[ ! -d "$INNER_DIR" ] && echo "ERROR: inner dir not found" && exit 1
-echo "Found unpacked dir: $INNER_DIR"
-
-echo "== COPYING PLUGIN =="
-BACKUP="${PLUGIN_DIR}_backup_$(date +%s)"
-cp -r "$PLUGIN_DIR" "$BACKUP" || true
-rm -rf "$PLUGIN_DIR"
-cp -r "$INNER_DIR" "$PLUGIN_DIR"
-COPY_RESULT=$?
-
-if [ $COPY_RESULT -eq 0 ]; then
-  echo "== CLEANING BACKUP =="
-  rm -rf "$BACKUP"
-  echo "== RESTARTING DECKY =="
-  systemctl restart plugin_loader.service
-  echo "== DONE: $(date)"
-else
-  echo "ERROR: update copy failed"
-  exit 1
-fi
-"""
+    result = await _run(
+        "systemd-run",
+        "--collect",
+        f"--unit={unit_name}",
+        "--service-type=oneshot",
+        "--quiet",
+        str(script),
+    )
+    if not result or result.returncode != 0:
+        flag.unlink(missing_ok=True)
+        detail = (result.stdout or "").strip() if result else "could not start systemd-run"
+        log_to_file(f"{name} failed to start: {detail}")
+        return False
+    return True
 
 
-def _write_update_script():
-    path = pathlib.Path("/tmp/deckywarp_update.sh")
-    path.write_text(UPDATE_SH)
-    path.chmod(0o755)
-    return str(path)
-
-# ── check-script (version check) ────────────────────────────────────────────
-
-CHECK_SH = r"""#!/bin/bash
-set -e
-exec > >(tee -a /tmp/deckywarp_check.log) 2>&1
-echo "== START CHECK: $(date)"
-
-GITHUB_API_URL="https://api.github.com/repos/Kit1112/DeckyWARP/releases/latest"
-PLUGIN_JSON_PATH="/home/deck/homebrew/plugins/DeckyWARP/plugin.json"
-
-curl -s -H 'Accept: application/vnd.github+json' "$GITHUB_API_URL" > /tmp/github_response.json
-LATEST=$(jq -r .tag_name /tmp/github_response.json | sed 's/^v//')
-CURRENT=$(jq -r .version "$PLUGIN_JSON_PATH")
-
-if [ "$LATEST" != "$CURRENT" ]; then
-  echo "update_available $LATEST $CURRENT"
-else
-  echo "up_to_date $CURRENT"
-fi
-
-"""
+def _current_version():
+    try:
+        return str(json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"])
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return "unknown"
 
 
-def _write_check_script():
-    p = pathlib.Path("/tmp/deckywarp_check.sh")
-    p.write_text(CHECK_SH)
-    p.chmod(0o755)
-    return str(p)
+def _parse_version(version):
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+    if not match:
+        raise ValueError(f"unsupported version format: {version}")
+    return tuple(int(part) for part in match.groups())
 
-# ── Decky plugin API ──────────────────────────────────────
+
+def _latest_release():
+    request = urllib.request.Request(
+        LATEST_RELEASE_API,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "DeckyWARP",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        payload = json.load(response)
+    version = str(payload["tag_name"]).removeprefix("v")
+    return version, str(payload.get("body", "")).strip()
+
 
 class Plugin:
-    async def _main(self): ...
+    async def _main(self):
+        _ensure_private_directory(RUNTIME_DIR, 0o700)
+        _ensure_private_directory(LOG_DIR, 0o750)
+        log_to_file("DeckyWARP backend started")
 
     async def _unload(self):
-        pass
-
-    # ---------- WARP TOGGLE / STATE --------------------------------------
+        log_to_file("DeckyWARP backend stopped")
 
     async def get_state(self):
         return _state()
 
     async def toggle_warp(self):
-        st = _state()
-        if st == "disconnected":
-            await _run("systemctl", "start", "warp-svc.service")
-            time.sleep(1)
-            st = _state()
-        if st == "connected":
-            await _run(WARP_BIN, "disconnect")
-            return await _wait("disconnected")
-        if st == "unregistered":
-            await _register()
-        await _run(WARP_BIN, "connect")
-        return await _wait("connected")
+        state = _state()
+        if state in ("missing", "installing"):
+            return state
+        if state == "connected":
+            await _run(str(WARP_BIN), "disconnect")
+            return await _wait_for("disconnected")
 
-    # ---------- INSTALL WARP-CLI -----------------------------------------
+        await _run("systemctl", "start", WARP_SERVICE)
+        await asyncio.sleep(1)
+        if _state() == "unregistered":
+            registration = await _run(
+                str(WARP_BIN), "--accept-tos", "registration", "new"
+            )
+            if not registration or registration.returncode != 0:
+                return "error"
+
+        mode = await _run(str(WARP_BIN), "mode", "warp+doh")
+        if not mode or mode.returncode != 0:
+            return "error"
+
+        await _run(str(WARP_BIN), "connect")
+        return await _wait_for("connected")
 
     async def install_warp(self):
-        if FLAG.exists():
+        if _job_active(JOB_FLAG):
             return "installing"
-        FLAG.touch()
-        await _run("systemctl", "reset-failed", f"{UNIT}.service")
-        await _run(
-            "systemd-run",
-            "--unit",
-            UNIT,
-            "--service-type=oneshot",
-            "--quiet",
-            _write_script(),
+        started = await _start_transient_job(
+            "deckywarp-install", INSTALL_SCRIPT, JOB_FLAG
         )
-        return "started"
+        return "started" if started else "error"
 
     async def get_install_log(self):
-        if LOG.exists():
-            try:
-                return LOG.read_text().splitlines()[-1][-160:]
-            except Exception:
-                pass
-        return ""
-
-    # ---------- PLUGIN UPDATE -------------------------------------------
+        try:
+            return INSTALL_LOG.read_text(encoding="utf-8")[-8000:]
+        except OSError:
+            return ""
 
     async def update_plugin(self):
-        """Запускает обновление плагина. Защита от повторного запуска через флаг."""
-        _cleanup_flag(UPD_FLAG, UPD_UNIT)
-        if _busy(UPD_FLAG):
+        if _job_active(JOB_FLAG):
             return "updating"
-        UPD_FLAG.touch()
-        await _run(
-            "systemd-run",
-            "--unit", UPD_UNIT,
-            "--service-type=oneshot",
-            "--quiet",
-            _write_update_script(),
+        started = await _start_transient_job(
+            "deckywarp-update", UPDATE_SCRIPT, JOB_FLAG
         )
-        return "update_started"
+        return "update_started" if started else "error"
 
     async def get_update_log(self):
-        _cleanup_flag(UPD_FLAG, UPD_UNIT)
         try:
-            if UPD_LOG.exists():
-                return UPD_LOG.read_text()[-8000:]
-        except Exception as e:
-            return f"[get_update_log ERROR] {e}"
-        return ""
+            return UPDATE_LOG.read_text(encoding="utf-8")[-8000:]
+        except OSError:
+            return ""
 
-    # ---------- VERSION CHECK -------------------------------------------
+    async def get_version(self):
+        return {"version": _current_version()}
 
     async def check_update(self):
-        """Проверить доступность новой версии через отдельный systemd unit."""
-        _cleanup_flag(CHK_FLAG, CHK_UNIT)
-        if _busy(CHK_FLAG):
-            return {"status": "checking"}
-        CHK_FLAG.touch()
-        await _run(
-            "systemd-run", "--unit", CHK_UNIT,
-            "--service-type=oneshot", "--quiet",
-            _write_check_script(),
-        )
-        await asyncio.sleep(1)
+        current = _current_version()
+        try:
+            latest, changelog = await asyncio.to_thread(_latest_release)
+        except Exception as error:
+            log_to_file(f"update check failed: {error}")
+            return {"status": "error", "detail": str(error), "current": current}
 
-        def _fetch_changelog():
-            import urllib.request
-            import ssl
-            import json
-            try:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+        try:
+            latest_version = _parse_version(latest)
+            current_version = _parse_version(current)
+        except ValueError as error:
+            return {"status": "error", "detail": str(error), "current": current}
 
-                with urllib.request.urlopen("https://api.github.com/repos/Kit1112/DeckyWARP/releases/latest", context=ctx) as resp:
-                    data = json.load(resp)
-                    body = data.get("body", "")
-                    lines = body.splitlines()
-
-                en_lines, ru_lines = [], []
-                mode = 0  # 0 = none, 1 = EN, 2 = RU
-
-                for line in lines:
-                    if line.strip().startswith("## **Changelog**"):
-                        mode = 1
-                        continue
-                    elif line.strip().startswith("## **Список изменений**"):
-                        mode = 2
-                        continue
-                    elif line.strip().startswith("#"):
-                        mode = 0
-                        continue
-
-                    if mode == 1:
-                        en_lines.append(line)
-                    elif mode == 2:
-                        ru_lines.append(line)
-
-                result = ""
-                if en_lines:
-                    result += "== EN ==\n" + "\n".join(en_lines).strip() + "\n"
-                if ru_lines:
-                    result += "\n== RU ==\n" + "\n".join(ru_lines).strip()
-                return result or "[changelog empty]"
-            except Exception as e:
-                return f"[changelog error] {e}"
-
-        if CHK_LOG.exists():
-            try:
-                lines = CHK_LOG.read_text().splitlines()
-                for line in reversed(lines):
-                    if line.startswith("update_available"):
-                        parts = line.strip().split()
-                        if len(parts) == 3:
-                            return {
-                                "status": "update_available",
-                                "latest": parts[1],
-                                "current": parts[2],
-                                "changelog": _fetch_changelog()
-                            }
-                    elif line.startswith("up_to_date"):
-                        parts = line.strip().split()
-                        if len(parts) == 2:
-                            return {
-                                "status": "up_to_date",
-                                "current": parts[1]
-                            }
-                return {"status": "error", "detail": "no update info in log"}
-            except Exception as e:
-                return {"status": "error", "detail": str(e)}
-        return {"status": "error", "detail": "log not found"}
-
-    # ---------- MISC -----------------------------------------------------
+        if latest_version > current_version:
+            return {
+                "status": "update_available",
+                "latest": latest,
+                "current": current,
+                "changelog": changelog or "No changelog provided.",
+            }
+        return {"status": "up_to_date", "current": current}
 
     async def clear_logs(self):
         try:
-            for f in [
-                "/tmp/deckywarp.log",
-                UPD_LOG,
-                CHK_LOG,
-                LOG,
-            ]:
-                pathlib.Path(f).unlink(missing_ok=True)
+            for log_file in (PLUGIN_LOG, INSTALL_LOG, UPDATE_LOG):
+                log_file.unlink(missing_ok=True)
             return "ok"
-        except Exception as e:
-            return f"error: {e}"
+        except OSError as error:
+            return f"error: {error}"
 
     async def stop_warp(self):
-        await _run(WARP_BIN, "disconnect")
+        await _run(str(WARP_BIN), "disconnect")
+        return _state()
 
 
 plugin = Plugin()
