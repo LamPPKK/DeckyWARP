@@ -1,5 +1,4 @@
 import {
-  definePlugin,
   PanelSection,
   PanelSectionRow,
   ButtonItem,
@@ -8,46 +7,40 @@ import {
   DialogButton,
   Focusable,
   Navigation,
-  ServerAPI,
-} from "decky-frontend-lib";
+} from "@decky/ui";
+import { definePlugin, routerHook } from "@decky/api";
 import { FaCloud } from "react-icons/fa";
 import { BsGearFill } from "react-icons/bs";
 import { Fragment, useEffect, useState } from "react";
-import ReactDOMServer from "react-dom/server";
 import SettingsPageRouter from "./pages/settings/SettingsPageRouter";
+import {
+  get_install_log,
+  get_state,
+  install_warp,
+  toggle_warp,
+  WarpState,
+} from "./backend";
 
-let api: ServerAPI;
-
-const setServerAPI = (s: ServerAPI) => (api = s);
-
-async function call<T = any>(name: string, params: Record<string, unknown>): Promise<T> {
-  const r = await api.callPluginMethod<T>(name, params);
-  if (r.success) return r.result;
-  throw r.result;
-}
-
-const get_state = () => call<string>("get_state", {});
-const toggle_warp = () => call<string>("toggle_warp", {});
-const install_warp = () => call("install_warp", {});
-const get_install_log = () => call<string>("get_install_log", {});
-const stop_warp = () => call("stop_warp", {});
-
-const txt = (ru: boolean, s: string): string => {
-  const ruT: Record<string, string> = {
+const txt = (ru: boolean, state: WarpState): string => {
+  const ruText: Record<WarpState, string> = {
     connected: "Статус WARP: Подключено",
     disconnected: "Статус WARP: Отключено",
+    connecting: "Статус WARP: Подключение…",
+    unregistered: "WARP требует регистрации",
     error: "Статус WARP: Неизвестно",
     missing: "WARP не установлен",
     installing: "Установка WARP…",
   };
-  const enT: Record<string, string> = {
+  const enText: Record<WarpState, string> = {
     connected: "WARP status: connected",
     disconnected: "WARP status: disconnected",
+    connecting: "WARP status: connecting…",
+    unregistered: "WARP needs registration",
     error: "WARP status: unknown",
     missing: "WARP is not installed",
     installing: "Installing WARP…",
   };
-  return (ru ? ruT : enT)[s];
+  return (ru ? ruText : enText)[state];
 };
 
 const Content = () => {
@@ -73,53 +66,66 @@ const Content = () => {
       svg.setAttribute("width", "18");
       svg.innerHTML = '<path d="M537.6 226.6c-28.7-82.4-111-138.6-200.3-138.6-63.6 0-122.8 29.5-161.2 79.4-72.6 6.3-128.1 67.1-128.1 141.3 0 79.5 64.5 144 144 144H496c70.7 0 128-57.3 128-128 0-63.3-45.9-116-104.4-129.1z"/>';
       icon.appendChild(svg);
-
       topBar.appendChild(icon);
-      console.log("[DeckyWARP] FaCloud icon appended (fallback mode)");
       observer.disconnect();
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      document.querySelector(".deckywarp-top-icon")?.remove();
+    };
   }, []);
 
-  const [st, setSt] = useState<string>("error");
-  const [log, setLog] = useState<string>("");
-
+  const [state, setState] = useState<WarpState>("error");
+  const [log, setLog] = useState("");
   const ru = navigator.language?.toLowerCase().startsWith("ru");
 
-  const refreshState = async () => setSt(await get_state());
-  const refreshLog = async () => setLog(await get_install_log());
+  const refreshState = async () => {
+    try {
+      setState(await get_state());
+    } catch (_) {
+      setState("error");
+    }
+  };
+  const refreshLog = async () => {
+    try {
+      setLog(await get_install_log());
+    } catch (_) {
+      setLog("");
+    }
+  };
 
   useEffect(() => {
-    refreshState();
-    const id = setInterval(() => {
-      refreshState();
-      refreshLog();
+    void refreshState();
+    const timer = setInterval(() => {
+      void refreshState();
+      void refreshLog();
     }, 3000);
-    return () => clearInterval(id);
+    return () => clearInterval(timer);
   }, []);
 
   return (
     <PanelSection>
-      <PanelSectionRow>{txt(ru, st)}</PanelSectionRow>
+      <PanelSectionRow>{txt(ru, state)}</PanelSectionRow>
       <PanelSectionRow>
         <div style={{ height: 8 }} />
       </PanelSectionRow>
 
-      {st === "missing" ? (
+      {state === "missing" ? (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
             onClick={async () => {
-              setSt("installing");
-              await install_warp();
+              setState("installing");
+              const result = await install_warp();
+              if (result === "error") setState("error");
             }}
           >
             {ru ? "Установить Cloudflare WARP" : "Install Cloudflare WARP"}
           </ButtonItem>
         </PanelSectionRow>
-      ) : st === "installing" ? (
+      ) : state === "installing" ? (
         <Fragment>
           <PanelSectionRow>
             <progress style={{ width: "100%" }} />
@@ -129,13 +135,27 @@ const Content = () => {
           </PanelSectionRow>
         </Fragment>
       ) : (
-        <PanelSectionRow>
-          <ToggleField
-            label="Cloudflare WARP"
-            checked={st === "connected"}
-            onChange={async () => setSt(await toggle_warp())}
-          />
-        </PanelSectionRow>
+        <Fragment>
+          <PanelSectionRow>
+            <ToggleField
+              label="Cloudflare WARP"
+              checked={state === "connected"}
+              onChange={async () => setState(await toggle_warp())}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={async () => {
+                setState("installing");
+                const result = await install_warp();
+                if (result === "error") setState("error");
+              }}
+            >
+              {ru ? "Обновить / восстановить Cloudflare WARP" : "Update / repair Cloudflare WARP"}
+            </ButtonItem>
+          </PanelSectionRow>
+        </Fragment>
       )}
     </PanelSection>
   );
@@ -170,18 +190,16 @@ const TitleView = () => {
   );
 };
 
-(window as any).call = call;
-
-export default definePlugin((serverAPI: ServerAPI) => {
-  setServerAPI(serverAPI);
-
-  serverAPI.routerHook.addRoute("/deckywarp/settings", () => (
-    <SettingsPageRouter serverAPI={serverAPI} />
-  ));
+export default definePlugin(() => {
+  routerHook.addRoute("/deckywarp/settings", SettingsPageRouter);
 
   return {
+    name: "DeckyWARP",
     titleView: <TitleView />,
     content: <Content />,
     icon: <FaCloud />,
+    onDismount() {
+      routerHook.removeRoute("/deckywarp/settings");
+    },
   };
 });

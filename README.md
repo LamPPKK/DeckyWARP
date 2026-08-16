@@ -1,48 +1,87 @@
 # DeckyWARP
 
-ㅤ
-# EN
-Auto-installing of Cloudflare WARP and its management from the plugins menu. Using WARP on a steam deck has never been so easy!
+DeckyWARP installs and controls the Cloudflare WARP Linux client from Decky Loader's Quick Access menu.
 
-This plugin was writed with a lot of help from ChatGPT. 
+This maintained fork continues the original [Kit1112/DeckyWARP](https://github.com/Kit1112/DeckyWARP) project for current SteamOS and Cloudflare WARP releases.
+
+## Features
+
+- Install or update Cloudflare WARP without adding Chaotic-AUR to `pacman.conf`.
+- Connect and disconnect WARP from Gaming Mode.
+- Register the consumer WARP client and select `warp+doh` mode automatically.
+- Preserve SteamOS readonly state after installation, including failure paths.
+- Check and install plugin updates from `LamPPKK/DeckyWARP` releases.
+- Verify both the Cloudflare package and DeckyWARP release with SHA-256 checksums.
+- Install root-executed plugin files as root-owned and read-only.
+
+## Install
+
+Decky Loader must already be installed. In Desktop Mode, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LamPPKK/DeckyWARP/main/InstallPlugin.sh \
+  -o /tmp/install-deckywarp.sh
+bash /tmp/install-deckywarp.sh
+```
+
+Return to Gaming Mode, open DeckyWARP, and choose **Install Cloudflare WARP**. Building the package can take several minutes.
+
+## Uninstall
+
+The default uninstall removes only the Decky plugin and preserves the system WARP client:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LamPPKK/DeckyWARP/main/UninstallPlugin.sh \
+  -o /tmp/uninstall-deckywarp.sh
+bash /tmp/uninstall-deckywarp.sh
+```
+
+To remove both the plugin and `cloudflare-warp-bin`:
+
+```bash
+REMOVE_WARP=1 bash /tmp/uninstall-deckywarp.sh
+```
+
+This preserves Cloudflare registration data in `/var/lib/cloudflare-warp`. Remove that directory manually only if you explicitly want to purge the device registration too.
+
+## SteamOS notes
+
+- Cloudflare does not officially list SteamOS or Arch Linux as supported client platforms. This project packages Cloudflare's official Ubuntu binary using a pinned AUR-derived recipe.
+- Release 1.6.0 pins `cloudflare-warp-bin` 2026.6.880-1, its official download URL, and SHA-256 from [the maintained AUR package](https://aur.archlinux.org/packages/cloudflare-warp-bin) at commit `0d9fb97e2a4ce66bf07ce6e6fbf70b7e0188ea36`.
+- SteamOS system updates may replace packages installed through `pacman`. If WARP disappears after a major SteamOS update, install it again from the plugin.
+- The WARP taskbar application is not enabled. DeckyWARP is the intended interface.
+- WARP is a network tunnel, not a country-selection or anonymity VPN.
+- Older DeckyWARP releases added Chaotic-AUR globally. Version 1.6.0 warns when that legacy repository is detected, but does not remove a repository that other software may share.
+
+## Build and test
+
+Requires Node.js and pnpm:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm test
+```
+
+## Tiếng Việt
+
+DeckyWARP cho phép cài, bật và tắt Cloudflare WARP ngay trong menu Quick Access của Decky Loader.
+
+- Cài plugin bằng lệnh trong mục **Install**.
+- Vào Gaming Mode, mở DeckyWARP và chọn **Install Cloudflare WARP**.
+- Sau khi cài xong, dùng công tắc trong plugin để kết nối hoặc ngắt WARP.
+- Gỡ plugin theo mặc định sẽ giữ lại WARP hệ thống. Dùng `REMOVE_WARP=1` nếu muốn gỡ cả hai.
+- Cloudflare không hỗ trợ SteamOS/Arch chính thức, nên bản này vẫn cần kiểm thử thực tế trên thiết bị sau khi phát hành.
+
 ## Credits
-- [This guide](https://www.reddit.com/r/SteamDeck/s/6iyB8zdGP4) — for the general method of installing WARP  
-- [DeckMTP](https://github.com/dafta/DeckMTP) — for frontend structure and build script  
-- [CSSLoader](https://github.com/DeckThemes/SDH-CssLoader) — for the header button and settings page implementation  
-- [Emuchievements](https://github.com/EmuDeck/Emuchievements) — for the notification implementation  
-- [Kvasiss](https://t.me/kvasiss) — for help with development, testing, and research  
-- **You, for using DeckyWARP!**
 
-## Cloning/modification
-The plugin is distributed under the most open conditions. You can clone/modify the code and distribute it without attribution.
-For self-assembly and/or fork, you can clone this repository and then run the commands ```pnpm i``` & ```pnpm build``` in your clone folder
+- [Kit1112](https://github.com/Kit1112) — original DeckyWARP author.
+- [DeckMTP](https://github.com/dafta/DeckMTP) — original frontend structure.
+- [CSSLoader](https://github.com/DeckThemes/SDH-CssLoader) — settings and header UI references.
+- [Emuchievements](https://github.com/EmuDeck/Emuchievements) — notification implementation reference.
 
+Cloudflare and WARP are trademarks of Cloudflare, Inc. This project is not affiliated with Cloudflare.
 
-ㅤ
-# RU
- Автоматическая установка Cloudflare WARP и управление им из меню плагинов. Использование WARP на Steam deck никогда не было таким простым!
+## License status
 
-Этот плагин был написан с большой помощью от ChatGPT.
-## Благодарности
-- [Этому гайду](https://www.reddit.com/r/SteamDeck/s/6iyB8zdGP4) — в целом за способ установки WARP
-- [DeckMTP](https://github.com/dafta/DeckMTP) — за основу фронтенда, скрипт для сборки  
-- [CSSLoader](https://github.com/DeckThemes/SDH-CssLoader) — реализация кнопки в заголовке, реализация страницы настроек  
-- [Emuchievements](https://github.com/EmuDeck/Emuchievements) — реализация уведомлений
-- [Kvasiss](https://t.me/kvasiss) — помощь в разработке, тестировании, поиске информации
-- **Вам за использование DeckyWARP!**
-
-## Клонирование/изменение
-Плагин распространяется на максимально открытых условиях. Можете клонировать/изменять код и распространять его без указания авторства.
-Для самостоятельной сборки и/или форка можете клонировать этот репозиторий и после выполнить в папке вашего клона команды ```pnpm i``` & ```pnpm build```
-
-ㅤ
-
-# Screenshots/Скриншоты
-![screenshot](https://i.ibb.co/svjVq2Jz/IMG-20250524-161456-971.jpg)
-![screenshot](https://i.ibb.co/Vk2wrrR/IMG-20250524-161611-262.jpg)
-![screenshot](https://i.ibb.co/20YZLXvJ/IMG-20250524-161626-108.jpg)
-![screenshot](https://i.ibb.co/przVbcGn/IMG-20250524-161706-642.jpg)
-![screenshot](https://i.ibb.co/0yVK9cKf/IMG-20250524-161641-259.jpg)
-![screenshot](https://i.ibb.co/GQTGKM8y/IMG-20250524-161654-538.jpg)
-
-
+The original repository did not include an explicit open-source license. This fork therefore does not claim permission to relicense the inherited code. Contact the original author before redistributing modified copies outside GitHub's fork functionality.
