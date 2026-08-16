@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly RELEASE_URL="https://github.com/LamPPKK/DeckyWARP/releases/latest/download/DeckyWARP.zip"
+release_tag="${DECKYWARP_RELEASE_TAG:-latest}"
+expected_release_sha256="${DECKYWARP_RELEASE_SHA256:-}"
+if [[ "$release_tag" == latest ]]; then
+    release_base_url="https://github.com/LamPPKK/DeckyWARP/releases/latest/download"
+elif [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    release_base_url="https://github.com/LamPPKK/DeckyWARP/releases/download/${release_tag}"
+else
+    echo "ERROR: DECKYWARP_RELEASE_TAG must be 'latest' or a tag like v1.6.1." >&2
+    exit 1
+fi
+if [[ -n "$expected_release_sha256" && ! "$expected_release_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "ERROR: DECKYWARP_RELEASE_SHA256 must be a lowercase SHA-256 digest." >&2
+    exit 1
+fi
+readonly release_tag expected_release_sha256 release_base_url
+readonly RELEASE_URL="${release_base_url}/DeckyWARP.zip"
 readonly CHECKSUM_URL="${RELEASE_URL}.sha256"
 
 temp_dir=""
@@ -99,15 +114,24 @@ plugin_dir="$plugins_dir/DeckyWARP"
 legacy_plugin_dir="$plugins_dir/decky-warp"
 temp_dir="$(mktemp -d /tmp/deckywarp-install.XXXXXX)"
 
-echo "Downloading the latest LamPPKK/DeckyWARP release"
+echo "Downloading LamPPKK/DeckyWARP release ${release_tag}"
 curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
     --retry 3 --output "$temp_dir/DeckyWARP.zip" "$RELEASE_URL"
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-    --retry 3 --output "$temp_dir/DeckyWARP.zip.sha256" "$CHECKSUM_URL"
-(
-    cd "$temp_dir"
-    sha256sum --check DeckyWARP.zip.sha256
-)
+if [[ -n "$expected_release_sha256" ]]; then
+    checksum_output="$(sha256sum "$temp_dir/DeckyWARP.zip")"
+    actual_release_sha256="${checksum_output%% *}"
+    [[ "$actual_release_sha256" == "$expected_release_sha256" ]] || {
+        echo "ERROR: DeckyWARP release checksum mismatch." >&2
+        exit 1
+    }
+else
+    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --retry 3 --output "$temp_dir/DeckyWARP.zip.sha256" "$CHECKSUM_URL"
+    (
+        cd "$temp_dir"
+        sha256sum --check DeckyWARP.zip.sha256
+    )
+fi
 
 unzip -q "$temp_dir/DeckyWARP.zip" -d "$temp_dir/release"
 release_root="$temp_dir/release/DeckyWARP"

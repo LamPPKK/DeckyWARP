@@ -26,6 +26,14 @@ bash /tmp/install-deckywarp.sh
 
 Return to Gaming Mode, open DeckyWARP, and choose **Install Cloudflare WARP**. Building the package can take several minutes.
 
+Automation can pin both the plugin tag and release archive checksum:
+
+```bash
+DECKYWARP_RELEASE_TAG=v1.6.1 \
+DECKYWARP_RELEASE_SHA256='<sha256-from-the-v1.6.1-release>' \
+bash /tmp/install-deckywarp.sh
+```
+
 ## Uninstall
 
 The default uninstall removes only the Decky plugin and preserves the system WARP client:
@@ -47,7 +55,7 @@ This preserves Cloudflare registration data in `/var/lib/cloudflare-warp`. Remov
 ## SteamOS notes
 
 - Cloudflare does not officially list SteamOS or Arch Linux as supported client platforms. This project packages Cloudflare's official Ubuntu binary using a pinned AUR-derived recipe.
-- Release 1.6.0 pins `cloudflare-warp-bin` 2026.6.880-1, its official download URL, and SHA-256 from [the maintained AUR package](https://aur.archlinux.org/packages/cloudflare-warp-bin) at commit `0d9fb97e2a4ce66bf07ce6e6fbf70b7e0188ea36`.
+- Release 1.6.1 pins `cloudflare-warp-bin` 2026.6.880-1, its official download URL, and SHA-256 from [the maintained AUR package](https://aur.archlinux.org/packages/cloudflare-warp-bin) at commit `0d9fb97e2a4ce66bf07ce6e6fbf70b7e0188ea36`.
 - SteamOS system updates may replace packages installed through `pacman`. If WARP disappears after a major SteamOS update, install it again from the plugin.
 - The WARP taskbar application is not enabled. DeckyWARP is the intended interface.
 - WARP is a network tunnel, not a country-selection or anonymity VPN.

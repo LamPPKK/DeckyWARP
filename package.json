@@ -1,6 +1,6 @@
 {
   "name": "DeckyWARP",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Install and control Cloudflare WARP from Decky Loader on SteamOS.",
   "type": "module",
   "scripts": {

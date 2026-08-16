@@ -1,7 +1,7 @@
 {
   "name": "DeckyWARP",
   "author": "death_nick, LamPPKK",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "flags": ["root"],
   "publish": {
     "tags": ["network", "utility", "vpn", "root"],
