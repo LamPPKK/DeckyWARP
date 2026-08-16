@@ -124,17 +124,17 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         plugin = main.Plugin()
         with (
             mock.patch.object(main, "_current_version", return_value="1.5.0"),
-            mock.patch.object(main, "_latest_release", return_value=("1.6.0", "Changes")),
+            mock.patch.object(main, "_latest_release", return_value=("1.6.1", "Changes")),
         ):
             result = await plugin.check_update()
         self.assertEqual(result["status"], "update_available")
-        self.assertEqual(result["latest"], "1.6.0")
+        self.assertEqual(result["latest"], "1.6.1")
 
     async def test_update_check_does_not_offer_downgrade(self):
         plugin = main.Plugin()
         with (
             mock.patch.object(main, "_current_version", return_value="1.7.0"),
-            mock.patch.object(main, "_latest_release", return_value=("1.6.0", "Older")),
+            mock.patch.object(main, "_latest_release", return_value=("1.6.1", "Older")),
         ):
             result = await plugin.check_update()
         self.assertEqual(result, {"status": "up_to_date", "current": "1.7.0"})
@@ -143,7 +143,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         plugin = main.Plugin()
         with (
             mock.patch.object(main, "_current_version", return_value="unknown"),
-            mock.patch.object(main, "_latest_release", return_value=("1.6.0", "Changes")),
+            mock.patch.object(main, "_latest_release", return_value=("1.6.1", "Changes")),
         ):
             result = await plugin.check_update()
         self.assertEqual(result["status"], "error")
@@ -154,9 +154,9 @@ class VersionTests(unittest.TestCase):
     def test_reads_plugin_version(self):
         with tempfile.TemporaryDirectory() as tempdir:
             plugin_json = pathlib.Path(tempdir) / "plugin.json"
-            plugin_json.write_text(json.dumps({"version": "1.6.0"}), encoding="utf-8")
+            plugin_json.write_text(json.dumps({"version": "1.6.1"}), encoding="utf-8")
             with mock.patch.object(main, "PLUGIN_JSON", plugin_json):
-                self.assertEqual(main._current_version(), "1.6.0")
+                self.assertEqual(main._current_version(), "1.6.1")
 
 
 if __name__ == "__main__":
